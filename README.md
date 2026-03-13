@@ -2,8 +2,8 @@
 
 ```
      _____ _____
-    / ____|  __ \    AI-Powered
-   | |    | |__) |   Code Review
+    / ____|  __ \    AI-Powered Code Review
+   | |    | |__) |   Three reviewers. One command.
    | |    |  _  /
    | |____|  | \ \
     \_____|  |  \_\
@@ -80,6 +80,7 @@ cr -s                     # review only staged changes
 cr -t 180                 # custom timeout (default: 300s)
 cr -l uk                  # review in Ukrainian
 cr -l de                  # review in German
+cr --ai                   # compact output for AI agents
 ```
 
 All options: `cr --help`
@@ -95,6 +96,8 @@ Each reviewer receives **three layers of context**:
 | Git diff | Changed lines only | **This is what gets reviewed** |
 
 The AI reviews **only the diff**. Everything else is context. No wasted tokens on unchanged code or data files.
+
+Results **stream as they arrive** — the fastest reviewer's output appears immediately, while the others are still working. No waiting for the slowest one.
 
 ## Output
 
@@ -139,7 +142,14 @@ The AI reviews **only the diff**. Everything else is context. No wasted tokens o
 
 ## AI-Friendly
 
-`cr` is designed to be called by AI agents too. Ask Claude Code to run `cr` — it gets structured review output from other AI models. A second (and third) opinion on its own code.
+`cr` is designed to be called by AI agents too. Use `--ai` for compact, token-efficient output with no banner, no colors, no decorations — just the findings.
+
+```bash
+cr --ai                   # compact output, optimized for AI consumption
+cr --ai -r claude,gemini  # AI mode with specific reviewers
+```
+
+Ask Claude Code to run `cr --ai` and it gets structured review output from other AI models — a second (and third) opinion on its own code.
 
 ## License
 

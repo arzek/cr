@@ -34,6 +34,7 @@ MAX_FILE_LINES=500
 MODEL=""
 LANG_CODE="en"
 STAGED_ONLY=false
+AI_MODE=false
 TARGET_DIR="."
 
 # ── Usage ───────────────────────────────────────────────────────────────────
@@ -49,6 +50,7 @@ Options:
   -s, --staged-only       Only review staged changes (git diff --cached)
   -t, --timeout SECS      Timeout per reviewer in seconds (default: 300)
   -l, --lang LANG         Review language: en, uk, de, fr, es, ja (default: en)
+      --ai                Compact output optimized for AI agents (no banner, no colors)
       --no-color          Disable colored output
   -h, --help              Show this help
 
@@ -61,6 +63,7 @@ Examples:
   cr -s                   Review only staged changes
   cr -l uk                Review in Ukrainian
   cr -t 180               Set timeout to 3 minutes
+  cr --ai                 Output optimized for AI consumption
 USAGE
     exit 0
 }
@@ -81,6 +84,7 @@ parse_args() {
                 fi
                 shift 2 ;;
             -l|--lang) LANG_CODE="$2"; shift 2 ;;
+            --ai) AI_MODE=true; RED='' GREEN='' BLUE='' PURPLE='' CYAN='' YELLOW='' BOLD='' DIM='' NC=''; shift ;;
             --no-color) RED='' GREEN='' BLUE='' PURPLE='' CYAN='' YELLOW='' BOLD='' DIM='' NC=''; shift ;;
             -h|--help) usage ;;
             -*) echo "Unknown option: $1" >&2; usage ;;
@@ -257,12 +261,15 @@ $DIFF_OUTPUT
 
 TASK: Review ONLY the changes shown in the DIFF above. The full file contents and project structure are provided only for context — do not review them.
 
+First, detect the tech stack from the project structure and file extensions (e.g. package.json = Node/TS, go.mod = Go, Cargo.toml = Rust, etc.). Apply the idiomatic conventions of that stack throughout your review.
+
 Focus on:
 1. Bugs & logic errors — incorrect logic, off-by-one, null/undefined, race conditions, missing edge cases
 2. Security — injection, exposed secrets, unsafe deserialization, auth gaps
 3. Performance — unnecessary allocations, O(n²) where O(n) possible, unbounded growth
 4. Error handling — swallowed errors, missing validation, unhandled rejections
 5. Code quality — naming clarity, dead code, unnecessary complexity
+6. Conventions & idioms — file/folder naming, project structure, patterns and style expected by the detected stack (e.g. Go: if err != nil, cmd/internal layout; NestJS: *.module.ts, DTOs, decorators; React: PascalCase components, use* hooks)
 
 OUTPUT FORMAT:
 - Start with a one-line severity summary: \"No issues found\" OR \"Found N issues (X critical, Y warnings, Z suggestions)\"
@@ -291,7 +298,7 @@ run_single_reviewer() {
         claude)
             local model_flag=""
             [[ -n "${MODEL:-}" ]] && model_flag="--model $MODEL"
-            env -u CLAUDECODE claude -p $model_flag < "$prompt_file" > "$out_file" 2> "$err_file" &
+            env -u CLAUDECODE claude -p --no-session-persistence $model_flag < "$prompt_file" > "$out_file" 2> "$err_file" &
             cmd_pid=$!
             ;;
         gemini)
@@ -334,8 +341,82 @@ run_single_reviewer() {
     echo "$((SECONDS - start_time))" > "$time_file"
 }
 
-# ── Run reviewers ──────────────────────────────────────────────────────────
-run_reviewers() {
+# ── Display one reviewer result ────────────────────────────────────────────
+display_one_result() {
+    local reviewer="$1"
+
+    local upper_name
+    upper_name=$(echo "$reviewer" | tr '[:lower:]' '[:upper:]')
+    local status_file="$TMP_DIR/${reviewer}.status"
+    local out_file="$TMP_DIR/${reviewer}.out"
+    local err_file="$TMP_DIR/${reviewer}.err"
+    local time_file="$TMP_DIR/${reviewer}.time"
+
+    local elapsed_raw="?"
+    [[ -f "$time_file" ]] && elapsed_raw=$(cat "$time_file")
+    local elapsed_fmt
+    if [[ "$elapsed_raw" == "?" ]]; then
+        elapsed_fmt="?"
+    else
+        elapsed_fmt=$(fmt_time "$elapsed_raw")
+    fi
+
+    local status="ok"
+    [[ -f "$status_file" ]] && status=$(cat "$status_file")
+
+    if [[ "$AI_MODE" == true ]]; then
+        echo "## ${upper_name}"
+        if [[ "$status" == "ok" ]] && [[ -f "$out_file" ]] && [[ -s "$out_file" ]]; then
+            cat "$out_file"
+        elif [[ "$status" == "timeout" ]]; then
+            echo "TIMEOUT after ${TIMEOUT}s"
+        else
+            echo "FAILED"
+        fi
+        echo ""
+        return
+    fi
+
+    local color
+    case "$reviewer" in
+        claude) color="$PURPLE" ;;
+        gemini) color="$BLUE" ;;
+        codex)  color="$GREEN" ;;
+        *)      color="$CYAN" ;;
+    esac
+
+    echo ""
+    if [[ "$status" == "ok" ]]; then
+        local pad_len=$((54 - ${#upper_name} - ${#elapsed_fmt}))
+        [[ $pad_len -lt 4 ]] && pad_len=4
+        local padding=""
+        for ((p=0; p<pad_len; p++)); do padding+="━"; done
+        echo "${color}━━ ${BOLD}${upper_name}${NC} ${color}${padding} ${DIM}${elapsed_fmt}${NC}"
+        echo ""
+        if [[ -f "$out_file" ]] && [[ -s "$out_file" ]]; then
+            sed 's/^/  /' "$out_file"
+        else
+            echo "  ${DIM}(no output)${NC}"
+        fi
+    elif [[ "$status" == "timeout" ]]; then
+        echo "${RED}━━ ${BOLD}${upper_name}${NC} ${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ TIMEOUT ${TIMEOUT}s${NC}"
+        echo "  ${RED}Timed out after ${TIMEOUT}s${NC}"
+        if [[ -f "$err_file" ]] && [[ -s "$err_file" ]]; then
+            echo "  ${DIM}$(head -5 "$err_file")${NC}"
+        fi
+    else
+        echo "${RED}━━ ${BOLD}${upper_name}${NC} ${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ FAILED${NC}"
+        if [[ -f "$err_file" ]] && [[ -s "$err_file" ]]; then
+            echo "  ${RED}$(head -10 "$err_file")${NC}"
+        fi
+        if [[ -f "$out_file" ]] && [[ -s "$out_file" ]]; then
+            sed 's/^/  /' "$out_file"
+        fi
+    fi
+}
+
+# ── Run reviewers and stream results ──────────────────────────────────────
+run_and_stream() {
     local tmp_dir
     tmp_dir=$(mktemp -d)
     TMP_DIR="$tmp_dir"
@@ -361,141 +442,117 @@ run_reviewers() {
         names+=("$reviewer")
     done
 
-    # Wait with animated progress
-    local reviewer_list="${ACTIVE_REVIEWERS[*]}"
-    echo ""
-    echo "  ${DIM}Reviewing with:${NC} ${BOLD}${reviewer_list// /, }${NC}"
-    echo ""
+    # Header
     local total_start=$SECONDS
+
+    if [[ "$AI_MODE" != true ]]; then
+        local repo_name branch_name
+        repo_name=$(basename "$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || basename "$TARGET_DIR")
+        branch_name=$(git -C "$TARGET_DIR" branch --show-current 2>/dev/null || echo "unknown")
+        local display_branch="$branch_name"
+        if [[ ${#display_branch} -gt 30 ]]; then
+            display_branch="${display_branch:0:27}..."
+        fi
+        local title="$repo_name ($display_branch)"
+
+        echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
+        echo "  ${BOLD}${title}${NC}"
+        echo "  ${DIM}${CHANGED_COUNT} files changed ${DIM}·${NC}${DIM} ${DIFF_LINES} diff lines${NC}"
+        echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
+
+        local reviewer_list="${ACTIVE_REVIEWERS[*]}"
+        echo ""
+        echo "  ${DIM}Reviewing with:${NC} ${BOLD}${reviewer_list// /, }${NC}"
+    fi
+
+    # Stream results as they finish
+    local displayed=()
+    local succeeded=0
+    local failed=0
     local spin_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
     local spin_idx=0
 
+    for reviewer in "${ACTIVE_REVIEWERS[@]}"; do
+        displayed+=("false")
+    done
+
     while true; do
         local all_done=true
-        local status_line="  "
-        local spinner="${spin_chars[$spin_idx]}"
-        spin_idx=$(( (spin_idx + 1) % ${#spin_chars[@]} ))
-        local elapsed=$((SECONDS - total_start))
+        local new_results=false
 
+        # Check for newly finished reviewers
         for i in "${!pids[@]}"; do
-            if kill -0 "${pids[$i]}" 2>/dev/null; then
-                status_line+="${CYAN}${spinner} ${names[$i]}${NC}  "
-                all_done=false
-            else
+            if [[ "${displayed[$i]}" == "false" ]] && ! kill -0 "${pids[$i]}" 2>/dev/null; then
+                # Clear spinner line before printing result
+                if [[ "$AI_MODE" != true ]]; then
+                    printf "\r%80s\r" ""
+                fi
+                displayed[$i]="true"
+                new_results=true
+
                 local s_file="$tmp_dir/${names[$i]}.status"
                 if [[ -f "$s_file" ]] && [[ "$(cat "$s_file")" == "ok" ]]; then
-                    status_line+="${GREEN}✓ ${names[$i]}${NC}  "
+                    succeeded=$((succeeded + 1))
                 else
-                    status_line+="${RED}✗ ${names[$i]}${NC}  "
+                    failed=$((failed + 1))
                 fi
+
+                display_one_result "${names[$i]}"
             fi
         done
-        status_line+="${DIM}$(fmt_time $elapsed)${NC}"
-        printf "\r%b" "$status_line"
+
+        # Check if all done
+        for i in "${!displayed[@]}"; do
+            if [[ "${displayed[$i]}" == "false" ]]; then
+                all_done=false
+                break
+            fi
+        done
+
         [[ "$all_done" == true ]] && break
+
+        # Show spinner for remaining reviewers
+        if [[ "$AI_MODE" != true ]]; then
+            local spinner="${spin_chars[$spin_idx]}"
+            spin_idx=$(( (spin_idx + 1) % ${#spin_chars[@]} ))
+            local elapsed=$((SECONDS - total_start))
+            local status_line="  "
+
+            for i in "${!pids[@]}"; do
+                if [[ "${displayed[$i]}" == "false" ]]; then
+                    status_line+="${CYAN}${spinner} ${names[$i]}${NC}  "
+                fi
+            done
+            status_line+="${DIM}$(fmt_time $elapsed)${NC}"
+            printf "\r%b" "$status_line"
+        fi
+
         sleep 0.1
     done
-    printf "\r%80s\r" ""
-    TOTAL_TIME=$((SECONDS - total_start))
-}
 
-# ── Display results ────────────────────────────────────────────────────────
-display_results() {
-    local repo_name branch_name
-    repo_name=$(basename "$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || basename "$TARGET_DIR")
-    branch_name=$(git -C "$TARGET_DIR" branch --show-current 2>/dev/null || echo "unknown")
-
-    # Header — truncate branch name to fit box
-    local display_branch="$branch_name"
-    if [[ ${#display_branch} -gt 30 ]]; then
-        display_branch="${display_branch:0:27}..."
+    if [[ "$AI_MODE" != true ]]; then
+        printf "\r%80s\r" ""
     fi
-    local title="$repo_name ($display_branch)"
 
-    echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
-    echo "  ${BOLD}${title}${NC}"
-    echo "  ${DIM}${CHANGED_COUNT} files changed ${DIM}·${NC}${DIM} ${DIFF_LINES} diff lines${NC}"
-    echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
-
-    local succeeded=0
-    local failed=0
-
-    # Reviewer color map
-    for reviewer in "${ACTIVE_REVIEWERS[@]}"; do
-        local color
-        case "$reviewer" in
-            claude) color="$PURPLE" ;;
-            gemini) color="$BLUE" ;;
-            codex)  color="$GREEN" ;;
-            *)      color="$CYAN" ;;
-        esac
-
-        local upper_name
-        upper_name=$(echo "$reviewer" | tr '[:lower:]' '[:upper:]')
-        local status_file="$TMP_DIR/${reviewer}.status"
-        local out_file="$TMP_DIR/${reviewer}.out"
-        local err_file="$TMP_DIR/${reviewer}.err"
-        local time_file="$TMP_DIR/${reviewer}.time"
-
-        local elapsed_raw="?"
-        [[ -f "$time_file" ]] && elapsed_raw=$(cat "$time_file")
-        local elapsed_fmt
-        if [[ "$elapsed_raw" == "?" ]]; then
-            elapsed_fmt="?"
-        else
-            elapsed_fmt=$(fmt_time "$elapsed_raw")
-        fi
-
-        local status="ok"
-        [[ -f "$status_file" ]] && status=$(cat "$status_file")
-
-        echo ""
-        if [[ "$status" == "ok" ]]; then
-            local pad_len=$((54 - ${#upper_name} - ${#elapsed_fmt}))
-            [[ $pad_len -lt 4 ]] && pad_len=4
-            local padding=""
-            for ((p=0; p<pad_len; p++)); do padding+="━"; done
-            echo "${color}━━ ${BOLD}${upper_name}${NC} ${color}${padding} ${DIM}${elapsed_fmt}${NC}"
-            echo ""
-            if [[ -f "$out_file" ]] && [[ -s "$out_file" ]]; then
-                sed 's/^/  /' "$out_file"
-            else
-                echo "  ${DIM}(no output)${NC}"
-            fi
-            succeeded=$((succeeded + 1))
-        elif [[ "$status" == "timeout" ]]; then
-            echo "${RED}━━ ${BOLD}${upper_name}${NC} ${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ TIMEOUT ${TIMEOUT}s${NC}"
-            echo "  ${RED}Timed out after ${TIMEOUT}s${NC}"
-            if [[ -f "$err_file" ]] && [[ -s "$err_file" ]]; then
-                echo "  ${DIM}$(head -5 "$err_file")${NC}"
-            fi
-            failed=$((failed + 1))
-        else
-            echo "${RED}━━ ${BOLD}${upper_name}${NC} ${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ FAILED${NC}"
-            if [[ -f "$err_file" ]] && [[ -s "$err_file" ]]; then
-                echo "  ${RED}$(head -10 "$err_file")${NC}"
-            fi
-            if [[ -f "$out_file" ]] && [[ -s "$out_file" ]]; then
-                sed 's/^/  /' "$out_file"
-            fi
-            failed=$((failed + 1))
-        fi
-    done
+    TOTAL_TIME=$((SECONDS - total_start))
 
     # Summary
-    echo ""
-    echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
-    local total=${#ACTIVE_REVIEWERS[@]}
-    if [[ $failed -eq 0 ]]; then
-        echo "  ${GREEN}${BOLD}${succeeded}/${total} passed${NC}  ${DIM}·${NC}  ${BOLD}$(fmt_time $TOTAL_TIME)${NC} ${DIM}(parallel)${NC}"
-    else
-        echo "  ${YELLOW}${BOLD}${succeeded}/${total} passed${NC}  ${DIM}·${NC}  ${RED}${BOLD}${failed} failed${NC}  ${DIM}·${NC}  ${BOLD}$(fmt_time $TOTAL_TIME)${NC} ${DIM}(parallel)${NC}"
+    if [[ "$AI_MODE" != true ]]; then
+        echo ""
+        echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
+        local total=${#ACTIVE_REVIEWERS[@]}
+        if [[ $failed -eq 0 ]]; then
+            echo "  ${GREEN}${BOLD}${succeeded}/${total} passed${NC}  ${DIM}·${NC}  ${BOLD}$(fmt_time $TOTAL_TIME)${NC} ${DIM}(parallel)${NC}"
+        else
+            echo "  ${YELLOW}${BOLD}${succeeded}/${total} passed${NC}  ${DIM}·${NC}  ${RED}${BOLD}${failed} failed${NC}  ${DIM}·${NC}  ${BOLD}$(fmt_time $TOTAL_TIME)${NC} ${DIM}(parallel)${NC}"
+        fi
+        echo ""
     fi
-    echo ""
 }
 
 # ── Banner ─────────────────────────────────────────────────────────────────
 show_banner() {
+    [[ "$AI_MODE" == true ]] && return
     echo ""
     echo "${PURPLE}${BOLD}     _____ _____  ${NC}"
     echo "${PURPLE}${BOLD}    / ____|  __ \\ ${NC}${DIM}  AI-Powered Code Review${NC}"
@@ -514,8 +571,7 @@ main() {
     gather_diff
     gather_context
     build_prompt
-    run_reviewers
-    display_results
+    run_and_stream
 }
 
 main "$@"
