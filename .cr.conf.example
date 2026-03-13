@@ -1,0 +1,22 @@
+# cr — AI-Powered Code Review Configuration
+# Copy to ~/.cr.conf (global) or ./.cr.conf (per-project)
+
+# Which reviewers to use (comma-separated: claude, gemini, codex)
+REVIEWERS="claude,gemini,codex"
+
+# Timeout per reviewer in seconds
+TIMEOUT=300
+
+# Maximum diff lines before truncation
+MAX_DIFF_LINES=3000
+
+# Maximum lines per file for context
+MAX_FILE_LINES=500
+
+# Model overrides per reviewer (leave empty for default)
+CLAUDE_MODEL="sonnet"
+GEMINI_MODEL=""
+CODEX_MODEL=""
+
+# Review language (ISO 639-1: en, uk, de, fr, es, ja, etc.)
+LANG="en"
