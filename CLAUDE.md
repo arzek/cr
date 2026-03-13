@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-`cr` — a single bash script CLI tool that runs AI code reviews in parallel using Claude, Gemini, and Codex CLIs. No dependencies, no build step.
+`cr` — a single bash script CLI tool that runs AI code reviews in parallel using Claude, Gemini, and Codex CLIs. No dependencies, no build step, no config files.
 
 ## Commands
 
@@ -17,22 +17,24 @@ cr -r claude -s       # quick test: single reviewer, staged changes only
 
 ## Architecture
 
-Everything is in `cr.sh` (~530 lines). The flow:
+Everything is in `cr.sh`. The flow:
 
-1. **parse_args** → CLI flags (-r, -s, -t, --no-color)
-2. **check_prerequisites** → verifies git repo, detects available CLI tools
-3. **gather_diff** → `git diff HEAD` (or `--cached` for staged-only), filters binaries, truncates large diffs
-4. **gather_context** → project tree (`git ls-tree`) + full contents of changed files
-5. **build_prompt** → assembles structured review prompt with 3 layers of context
-6. **run_single_reviewer** → runs one reviewer with stdin pipe + watchdog timeout
-7. **run_reviewers** → launches all reviewers as background processes, animated spinner progress
-8. **display_results** → colored output with per-reviewer sections and summary
+1. **parse_args** → CLI flags (-r, -m, -s, -t, -l, --no-color)
+2. **show_banner** → ASCII art logo
+3. **check_prerequisites** → verifies git repo, detects available CLI tools
+4. **gather_diff** → `git diff HEAD` (or `--cached` for staged-only), filters binaries, truncates large diffs
+5. **gather_context** → project tree (`git ls-tree`) + full contents of changed files
+6. **build_prompt** → assembles structured review prompt with 3 layers of context
+7. **run_single_reviewer** → runs one reviewer with stdin pipe + watchdog timeout
+8. **run_reviewers** → launches all reviewers as background processes, animated spinner progress
+9. **display_results** → colored output with per-reviewer sections and summary
 
 Key design decisions:
+- All configuration is via CLI flags — no config files
+- Color variables use `$'\033[...]'` (real ESC bytes) so `echo` works without `-e`
 - Prompt is written to a temp file and piped via stdin to avoid ARG_MAX limits
 - Claude invocation uses `env -u CLAUDECODE` to allow running from within Claude Code sessions
 - Codex uses `--output-last-message` flag to capture only the final review (suppresses verbose debug output)
-- Config loading: `~/.cr.conf` (global) → `./.cr.conf` (project) → CLI args (highest priority)
 - macOS has no `timeout` command, so timeout uses a sleep+kill watchdog pattern
 - Time formatting via `fmt_time()` — displays seconds < 60 as `Ns`, otherwise as `XmYs`
 - Progress spinner uses braille characters with `printf %b` for color escape interpretation

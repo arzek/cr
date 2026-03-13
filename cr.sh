@@ -3,15 +3,15 @@ set -euo pipefail
 
 # ── Colors ──────────────────────────────────────────────────────────────────
 if [[ -t 1 ]] && [[ "${NO_COLOR:-}" == "" ]]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    BLUE='\033[0;34m'
-    PURPLE='\033[0;35m'
-    CYAN='\033[0;36m'
-    YELLOW='\033[1;33m'
-    BOLD='\033[1m'
-    DIM='\033[2m'
-    NC='\033[0m'
+    RED=$'\033[0;31m'
+    GREEN=$'\033[0;32m'
+    BLUE=$'\033[0;34m'
+    PURPLE=$'\033[0;35m'
+    CYAN=$'\033[0;36m'
+    YELLOW=$'\033[1;33m'
+    BOLD=$'\033[1m'
+    DIM=$'\033[2m'
+    NC=$'\033[0m'
 else
     RED='' GREEN='' BLUE='' PURPLE='' CYAN='' YELLOW='' BOLD='' DIM='' NC=''
 fi
@@ -31,45 +31,10 @@ REVIEWERS="claude,gemini,codex"
 TIMEOUT=300
 MAX_DIFF_LINES=3000
 MAX_FILE_LINES=500
-CLAUDE_MODEL="sonnet"
-GEMINI_MODEL=""
-CODEX_MODEL=""
+MODEL=""
 LANG_CODE="en"
 STAGED_ONLY=false
 TARGET_DIR="."
-
-# ── Config loading ──────────────────────────────────────────────────────────
-load_config() {
-    local config_file="$1"
-    if [[ -f "$config_file" ]]; then
-        while IFS='=' read -r key value; do
-            key=$(echo "$key" | tr -d '[:space:]')
-            # Strip quotes, inline comments, and whitespace
-            value=$(echo "$value" | sed 's/[[:space:]]*#.*//' | sed 's/^["'\'']//' | sed 's/["'\'']*$//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-            [[ "$key" =~ ^#.*$ ]] && continue
-            [[ -z "$key" ]] && continue
-            case "$key" in
-                REVIEWERS)      REVIEWERS="$value" ;;
-                TIMEOUT)
-                    if [[ "$value" =~ ^[0-9]+$ ]]; then
-                        TIMEOUT="$value"
-                    else
-                        echo "Warning: TIMEOUT must be numeric, ignoring '$value'" >&2
-                    fi
-                    ;;
-                MAX_DIFF_LINES) MAX_DIFF_LINES="$value" ;;
-                MAX_FILE_LINES) MAX_FILE_LINES="$value" ;;
-                CLAUDE_MODEL)   CLAUDE_MODEL="$value" ;;
-                GEMINI_MODEL)   GEMINI_MODEL="$value" ;;
-                CODEX_MODEL)    CODEX_MODEL="$value" ;;
-                LANG)           LANG_CODE="$value" ;;
-            esac
-        done < "$config_file"
-    fi
-}
-
-# Load global config, then project-level (overrides global)
-load_config "$HOME/.cr.conf"
 
 # ── Usage ───────────────────────────────────────────────────────────────────
 usage() {
@@ -80,20 +45,22 @@ Usage: cr [OPTIONS] [DIRECTORY]
 
 Options:
   -r, --reviewers LIST    Comma-separated: claude,gemini,codex (default: all)
+  -m, --model MODEL       Model to use for reviewers (e.g. sonnet, o3, etc.)
   -s, --staged-only       Only review staged changes (git diff --cached)
   -t, --timeout SECS      Timeout per reviewer in seconds (default: 300)
-  -l, --lang LANG         Review language: en, uk, de, fr, etc. (default: en)
+  -l, --lang LANG         Review language: en, uk, de, fr, es, ja (default: en)
       --no-color          Disable colored output
   -h, --help              Show this help
 
 Examples:
-  cr                      Review all changes in current directory
+  cr                      Review all uncommitted changes
   cr /path/to/repo        Review changes in a specific repo
-  cr -r claude,gemini     Use only Claude and Gemini
+  cr -r claude            Use only Claude
+  cr -r claude,gemini     Use Claude and Gemini
+  cr -m sonnet            Use specific model for all reviewers
   cr -s                   Review only staged changes
   cr -l uk                Review in Ukrainian
-
-Config: ~/.cr.conf or ./.cr.conf (project-level overrides global)
+  cr -t 180               Set timeout to 3 minutes
 USAGE
     exit 0
 }
@@ -103,6 +70,7 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -r|--reviewers) REVIEWERS="$2"; shift 2 ;;
+            -m|--model) MODEL="$2"; shift 2 ;;
             -s|--staged-only) STAGED_ONLY=true; shift ;;
             -t|--timeout)
                 if [[ "$2" =~ ^[0-9]+$ ]]; then
@@ -125,12 +93,9 @@ parse_args() {
 check_prerequisites() {
     # Check if target is a git repo
     if ! git -C "$TARGET_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
-        echo -e "${RED}Error:${NC} $TARGET_DIR is not a git repository." >&2
+        echo "${RED}Error:${NC} $TARGET_DIR is not a git repository." >&2
         exit 1
     fi
-
-    # Load project-level config (now that we know TARGET_DIR)
-    load_config "$TARGET_DIR/.cr.conf"
 
     # Check which reviewers are available
     local available=()
@@ -162,7 +127,7 @@ check_prerequisites() {
                 fi
                 ;;
             *)
-                echo -e "${YELLOW}Warning:${NC} Unknown reviewer '$reviewer', skipping." >&2
+                echo "${YELLOW}Warning:${NC} Unknown reviewer '$reviewer', skipping." >&2
                 ;;
         esac
     done
@@ -170,12 +135,12 @@ check_prerequisites() {
     # Warn about missing tools
     if [[ ${#missing[@]} -gt 0 ]]; then
         for tool in "${missing[@]}"; do
-            echo -e "${YELLOW}Warning:${NC} '$tool' not found, skipping." >&2
+            echo "${YELLOW}Warning:${NC} '$tool' not found, skipping." >&2
         done
     fi
 
     if [[ ${#available[@]} -eq 0 ]]; then
-        echo -e "${RED}Error:${NC} No reviewers available. Install at least one of: claude, gemini, codex" >&2
+        echo "${RED}Error:${NC} No reviewers available. Install at least one of: claude, gemini, codex" >&2
         exit 1
     fi
 
@@ -201,7 +166,9 @@ gather_diff() {
     diff_output=$(echo "$diff_output" | grep -v "^Binary files" || true)
 
     if [[ -z "$diff_output" ]]; then
-        echo -e "\n  ${GREEN}Nothing to review${NC} ${DIM}— no changes detected.${NC}\n"
+        echo ""
+        echo "  ${GREEN}Nothing to review${NC} ${DIM}— no changes detected.${NC}"
+        echo ""
         exit 0
     fi
 
@@ -210,7 +177,7 @@ gather_diff() {
     line_count=$(echo "$diff_output" | wc -l | tr -d '[:space:]')
 
     if [[ "$line_count" -gt "$MAX_DIFF_LINES" ]]; then
-        echo -e "${YELLOW}Warning:${NC} Diff is $line_count lines, truncating to $MAX_DIFF_LINES." >&2
+        echo "${YELLOW}Warning:${NC} Diff is $line_count lines, truncating to $MAX_DIFF_LINES." >&2
         diff_output=$(echo "$diff_output" | head -n "$MAX_DIFF_LINES")
         diff_output+=$'\n[TRUNCATED: diff exceeded '"$MAX_DIFF_LINES"' lines]'
     fi
@@ -323,19 +290,19 @@ run_single_reviewer() {
     case "$reviewer" in
         claude)
             local model_flag=""
-            [[ -n "${CLAUDE_MODEL:-}" ]] && model_flag="--model $CLAUDE_MODEL"
+            [[ -n "${MODEL:-}" ]] && model_flag="--model $MODEL"
             env -u CLAUDECODE claude -p $model_flag < "$prompt_file" > "$out_file" 2> "$err_file" &
             cmd_pid=$!
             ;;
         gemini)
             local model_flag=""
-            [[ -n "${GEMINI_MODEL:-}" ]] && model_flag="-m $GEMINI_MODEL"
+            [[ -n "${MODEL:-}" ]] && model_flag="-m $MODEL"
             gemini $model_flag < "$prompt_file" > "$out_file" 2> "$err_file" &
             cmd_pid=$!
             ;;
         codex)
             local model_flag=""
-            [[ -n "${CODEX_MODEL:-}" ]] && model_flag="-m $CODEX_MODEL"
+            [[ -n "${MODEL:-}" ]] && model_flag="-m $MODEL"
             codex exec $model_flag --output-last-message "$out_file" - < "$prompt_file" > /dev/null 2> "$err_file" &
             cmd_pid=$!
             ;;
@@ -397,7 +364,7 @@ run_reviewers() {
     # Wait with animated progress
     local reviewer_list="${ACTIVE_REVIEWERS[*]}"
     echo ""
-    echo -e "  ${DIM}Reviewing with:${NC} ${BOLD}${reviewer_list// /, }${NC}"
+    echo "  ${DIM}Reviewing with:${NC} ${BOLD}${reviewer_list// /, }${NC}"
     echo ""
     local total_start=$SECONDS
     local spin_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
@@ -445,11 +412,10 @@ display_results() {
     fi
     local title="$repo_name ($display_branch)"
 
-    echo ""
-    echo -e "${BOLD}${PURPLE}╔══════════════════════════════════════════════════════════════╗${NC}"
-    printf "${BOLD}${PURPLE}║${NC}  ${BOLD}Code Review${NC}: %-46s${BOLD}${PURPLE}║${NC}\n" "$title"
-    printf "${BOLD}${PURPLE}║${NC}  ${DIM}Files: ${NC}%-3s ${DIM}│ Diff: ${NC}%-3s lines%-23s${BOLD}${PURPLE}║${NC}\n" "$CHANGED_COUNT" "$DIFF_LINES" ""
-    echo -e "${BOLD}${PURPLE}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
+    echo "  ${BOLD}${title}${NC}"
+    echo "  ${DIM}${CHANGED_COUNT} files changed ${DIM}·${NC}${DIM} ${DIFF_LINES} diff lines${NC}"
+    echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
 
     local succeeded=0
     local failed=0
@@ -489,25 +455,25 @@ display_results() {
             [[ $pad_len -lt 4 ]] && pad_len=4
             local padding=""
             for ((p=0; p<pad_len; p++)); do padding+="━"; done
-            echo -e "${color}━━ ${BOLD}${upper_name}${NC} ${color}${padding} ${DIM}${elapsed_fmt}${NC}"
+            echo "${color}━━ ${BOLD}${upper_name}${NC} ${color}${padding} ${DIM}${elapsed_fmt}${NC}"
             echo ""
             if [[ -f "$out_file" ]] && [[ -s "$out_file" ]]; then
                 sed 's/^/  /' "$out_file"
             else
-                echo -e "  ${DIM}(no output)${NC}"
+                echo "  ${DIM}(no output)${NC}"
             fi
             succeeded=$((succeeded + 1))
         elif [[ "$status" == "timeout" ]]; then
-            echo -e "${RED}━━ ${BOLD}${upper_name}${NC} ${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ TIMEOUT ${TIMEOUT}s${NC}"
-            echo -e "  ${RED}Timed out after ${TIMEOUT}s${NC}"
+            echo "${RED}━━ ${BOLD}${upper_name}${NC} ${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ TIMEOUT ${TIMEOUT}s${NC}"
+            echo "  ${RED}Timed out after ${TIMEOUT}s${NC}"
             if [[ -f "$err_file" ]] && [[ -s "$err_file" ]]; then
-                echo -e "  ${DIM}$(head -5 "$err_file")${NC}"
+                echo "  ${DIM}$(head -5 "$err_file")${NC}"
             fi
             failed=$((failed + 1))
         else
-            echo -e "${RED}━━ ${BOLD}${upper_name}${NC} ${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ FAILED${NC}"
+            echo "${RED}━━ ${BOLD}${upper_name}${NC} ${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ FAILED${NC}"
             if [[ -f "$err_file" ]] && [[ -s "$err_file" ]]; then
-                echo -e "  ${RED}$(head -10 "$err_file")${NC}"
+                echo "  ${RED}$(head -10 "$err_file")${NC}"
             fi
             if [[ -f "$out_file" ]] && [[ -s "$out_file" ]]; then
                 sed 's/^/  /' "$out_file"
@@ -518,20 +484,32 @@ display_results() {
 
     # Summary
     echo ""
-    echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "  ${DIM}──────────────────────────────────────────────────────────${NC}"
     local total=${#ACTIVE_REVIEWERS[@]}
     if [[ $failed -eq 0 ]]; then
-        echo -e "  ${GREEN}${BOLD}${succeeded}/${total}${NC} reviewers completed ${DIM}|${NC} ${BOLD}$(fmt_time $TOTAL_TIME)${NC} ${DIM}(parallel)${NC}"
+        echo "  ${GREEN}${BOLD}${succeeded}/${total} passed${NC}  ${DIM}·${NC}  ${BOLD}$(fmt_time $TOTAL_TIME)${NC} ${DIM}(parallel)${NC}"
     else
-        echo -e "  ${YELLOW}${BOLD}${succeeded}/${total}${NC} reviewers completed ${DIM}|${NC} ${BOLD}$(fmt_time $TOTAL_TIME)${NC} ${DIM}(parallel)${NC}"
-        echo -e "  ${RED}${failed} reviewer(s) failed${NC}"
+        echo "  ${YELLOW}${BOLD}${succeeded}/${total} passed${NC}  ${DIM}·${NC}  ${RED}${BOLD}${failed} failed${NC}  ${DIM}·${NC}  ${BOLD}$(fmt_time $TOTAL_TIME)${NC} ${DIM}(parallel)${NC}"
     fi
+    echo ""
+}
+
+# ── Banner ─────────────────────────────────────────────────────────────────
+show_banner() {
+    echo ""
+    echo "${PURPLE}${BOLD}     _____ _____  ${NC}"
+    echo "${PURPLE}${BOLD}    / ____|  __ \\ ${NC}${DIM}  AI-Powered Code Review${NC}"
+    echo "${PURPLE}${BOLD}   | |    | |__) |${NC}${DIM}  Three reviewers. One command.${NC}"
+    echo "${PURPLE}${BOLD}   | |    |  _  / ${NC}"
+    echo "${PURPLE}${BOLD}   | |____|  | \\ \\ ${NC}"
+    echo "${PURPLE}${BOLD}    \\_____|  |  \\_\\${NC}"
     echo ""
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────
 main() {
     parse_args "$@"
+    show_banner
     check_prerequisites
     gather_diff
     gather_context

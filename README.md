@@ -1,14 +1,22 @@
 <p align="center">
-  <h1 align="center">cr</h1>
-  <p align="center">
-    <strong>One command. Three AI code reviewers. Zero trust issues.</strong>
-  </p>
-  <p align="center">
-    <a href="#install">Install</a> &middot;
-    <a href="#usage">Usage</a> &middot;
-    <a href="#how-it-works">How It Works</a> &middot;
-    <a href="#configuration">Configuration</a>
-  </p>
+
+```
+     _____ _____
+    / ____|  __ \    AI-Powered
+   | |    | |__) |   Code Review
+   | |    |  _  /
+   | |____|  | \ \
+    \_____|  |  \_\
+```
+
+<strong>One command. Three AI reviewers. Zero trust issues.</strong>
+
+<br/>
+
+<a href="#install">Install</a> &middot;
+<a href="#usage">Usage</a> &middot;
+<a href="#how-it-works">How It Works</a>
+
 </p>
 
 ---
@@ -26,15 +34,15 @@ This is slow. Error-prone. And boring.
 ```
           You write code
           (or AI writes it)
-                ↓
+                |
             git diff
-                ↓
-        ┌───────┼───────┐
-        ↓       ↓       ↓
-     Claude  Gemini   Codex     ← parallel, read-only
-        ↓       ↓       ↓
-        └───────┼───────┘
-                ↓
+                |
+        .-------+-------.
+        |       |       |
+     Claude  Gemini   Codex      parallel, read-only
+        |       |       |
+        '-------+-------'
+                |
        Formatted reviews
 ```
 
@@ -65,12 +73,16 @@ At least one of these CLI tools must be installed:
 ```bash
 cr                        # review all uncommitted changes
 cr /path/to/repo          # review changes in a specific repo
-cr -r claude,gemini       # use only specific reviewers
+cr -r claude              # use only Claude
+cr -r claude,gemini       # use Claude and Gemini
+cr -m sonnet              # use specific model for all reviewers
 cr -s                     # review only staged changes
-cr -t 180                 # custom timeout per reviewer (default: 300s)
+cr -t 180                 # custom timeout (default: 300s)
 cr -l uk                  # review in Ukrainian
 cr -l de                  # review in German
 ```
+
+All options: `cr --help`
 
 ## How It Works
 
@@ -87,46 +99,42 @@ The AI reviews **only the diff**. Everything else is context. No wasted tokens o
 ## Output
 
 ```
-╔══════════════════════════════════════════════════════════════╗
-║  Code Review: my-project (feature/auth)                     ║
-║  Files: 5   │ Diff: 247 lines                               ║
-╚══════════════════════════════════════════════════════════════╝
+     _____ _____
+    / ____|  __ \   AI-Powered Code Review
+   | |    | |__) |  Three reviewers. One command.
+   | |    |  _  /
+   | |____|  | \ \
+    \_____|  |  \_\
 
-━━ CLAUDE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42s
+  ──────────────────────────────────────────────────────────
+  my-project (feature/auth)
+  5 files changed · 247 diff lines
+  ──────────────────────────────────────────────────────────
+
+  Reviewing with: claude, gemini, codex
+
+  ✓ claude  ✓ gemini  ⠹ codex  42s
+
+━━ CLAUDE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42s
 
   Found 2 issues (1 critical, 1 warning)
   [CRITICAL] auth.js:42 — SQL injection via unsanitized user input
   [WARNING]  utils.js:15 — Missing null check on optional parameter
   Overall: Auth endpoint needs input sanitization before merge.
 
-━━ GEMINI ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 28s
+━━ GEMINI ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 28s
 
   Found 1 issue (1 warning)
   [WARNING] auth.js:42 — Consider using parameterized queries
   Overall: One SQL safety concern, otherwise clean.
 
-━━ CODEX ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 51s
+━━ CODEX ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 51s
 
   No issues found.
   Overall: Clean implementation, follows existing patterns.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  3/3 reviewers completed | 51s (parallel)
-```
-
-## Configuration
-
-Create `~/.cr.conf` (global) or `.cr.conf` in your project root (overrides global):
-
-```bash
-REVIEWERS="claude,gemini,codex"    # which reviewers to use
-TIMEOUT=300                        # timeout per reviewer (seconds)
-MAX_DIFF_LINES=3000                # truncate diff after this many lines
-MAX_FILE_LINES=500                 # max lines per file for context
-CLAUDE_MODEL="sonnet"              # model overrides
-GEMINI_MODEL=""
-CODEX_MODEL=""
-LANG="en"                          # review language (en, uk, de, fr, es, ja...)
+  ──────────────────────────────────────────────────────────
+  3/3 passed  ·  51s (parallel)
 ```
 
 ## AI-Friendly
