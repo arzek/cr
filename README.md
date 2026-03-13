@@ -51,7 +51,7 @@ This is slow. Error-prone. And boring.
 ## Install
 
 ```bash
-git clone git@github.com:arzek/code-review.git
+git clone git@github.com:arzek/cr.git
 cd code-review
 make install
 ```
